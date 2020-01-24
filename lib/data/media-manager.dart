@@ -5,6 +5,7 @@ import 'package:hive/hive.dart';
 import 'package:inside_chassidus/data/models/inside-data/index.dart';
 import 'package:inside_chassidus/data/repositories/class-position-repository.dart';
 import 'package:inside_chassidus/util/audio-service/audio-task.dart';
+import 'package:inside_chassidus/util/audio-service/util.dart';
 import 'package:rxdart/rxdart.dart';
 
 class MediaManager extends BlocBase {
@@ -34,30 +35,49 @@ class MediaManager extends BlocBase {
             ? BasicPlaybackState.stopped
             : state.basicState;
 
-        _mediaSubject.value = current.copyWith(state: newState);
+        _mediaSubject.value = current.copyWith(state: newState, event: state);
       }
     });
 
-    Rx.combineLatest4<PlaybackState, dynamic, Duration, MediaState,
-                WithMediaState<Duration>>(
-            AudioService.playbackStateStream
-                .where((state) => state?.basicState != BasicPlaybackState.none),
-            Stream.periodic(Duration(milliseconds: 20)),
-            _seekingValues,
-            _mediaSubject,
-            (state, _, displaySeek, mediaState) =>
-                _onPositionUpdate(state, displaySeek, mediaState))
-        .listen((state) => _positionSubject.value = state);
+    Rx.combineLatest3<dynamic, Duration, MediaState, WithMediaState<Duration>>(
+        Stream.periodic(Duration(milliseconds: 20)),
+        _seekingValues,
+        // When user hits play, until play back starts, the manager doesn't know where
+        // the player is holding.
+        // The position repository and audio task are in charge of that.
+        // Therefore, when event is null (from being set in play method) - don't update what
+        // we consider to be current postion based on that.
+        _mediaSubject.where((media) => media.event != null),
+        (_, displaySeek, mediaState) =>
+            _getCurrentPosition(displaySeek, mediaState)).listen(
+        (state) => _positionSubject.value = state);
 
     // Save the current position of media, in case user listens to another class and then comes back.
-    mediaPosition.throttleTime(Duration(milliseconds: 200)).listen((state) =>
+    mediaPosition.sampleTime(Duration(milliseconds: 200)).listen((state) =>
         positionRepository.updatePosition(current.media, state.data));
 
-    _seekingValues
-        .debounceTime(Duration(milliseconds: 50))
-        .where((position) => position != null)
-        .listen((position) => AudioService.seekTo(
-            position.inMilliseconds < 0 ? 0 : position.inMilliseconds));
+    final nonNullSeekingValues =
+        _seekingValues.where((position) => position != null);
+
+    // Change the audio position. Makes sure we don't seek too often.
+    nonNullSeekingValues
+        .sampleTime(Duration(milliseconds: 50))
+        .listen((position) async {
+      AudioService.seekTo(
+          position.inMilliseconds < 0 ? 0 : position.inMilliseconds);
+    });
+
+    // Clear seeking value as soon as the latest value is being used by audio_service.
+    // Untill then, it holds information relevant to the UI; after, that information has been
+    // moved to audio_service.
+    Rx.combineLatest2<MediaState, Duration, void>(mediaState, nonNullSeekingValues,
+        (state, seeking) {
+      // Clear seeking_value if it's latest value has been consumed by audio_service.
+      if (isSeeking(state.state) &&
+          state.event.currentPosition == seeking.inMilliseconds) {
+        _seekingValues.value = null;
+      }
+    }).listen((_) {});
   }
 
   /// The media which is currently playing.
@@ -125,29 +145,19 @@ class MediaManager extends BlocBase {
     seek(media, Duration(milliseconds: currentLocation) + duration);
   }
 
-  WithMediaState<Duration> _onPositionUpdate(
-      PlaybackState state, Duration displaySeek, MediaState mediaState) {
-    if (state == null) {
+  WithMediaState<Duration> _getCurrentPosition(
+      Duration displaySeek, MediaState mediaState) {
+    if (mediaState.state == null) {
       return WithMediaState(
           state: mediaState,
           data: Duration(
               milliseconds: AudioService.playbackState?.position ?? 0));
     }
 
-    int position;
-
-    if ((state.basicState == BasicPlaybackState.fastForwarding ||
-            state.basicState == BasicPlaybackState.rewinding) &&
-        displaySeek != null) {
-      position = displaySeek.inMilliseconds;
-    } else if (state.basicState != BasicPlaybackState.playing) {
-      // If playback is paused, then we're in the same place as last update.
-      position = state.position;
-    } else {
-      final timeSinceUpdate = DateTime.now()
-          .difference(DateTime.fromMillisecondsSinceEpoch(state.updateTime));
-      position = state.position + timeSinceUpdate.inMilliseconds;
-    }
+    // If the user wants the audio to be in a particular position, for UI purposes
+    // consider that we are already there.
+    final position =
+        displaySeek?.inMilliseconds ?? mediaState.event.currentPosition;
 
     return WithMediaState(
         state: mediaState, data: Duration(milliseconds: position));
@@ -168,15 +178,20 @@ backgroundTaskEntrypoint() async =>
 class MediaState {
   final Media media;
   final BasicPlaybackState state;
+  final PlaybackState event;
   final bool isLoaded;
 
-  MediaState({this.media, this.state})
+  MediaState({this.media, this.state, this.event})
       : isLoaded = state != BasicPlaybackState.connecting &&
             state != BasicPlaybackState.error &&
             state != BasicPlaybackState.none;
 
-  MediaState copyWith({Media media, BasicPlaybackState state}) =>
-      MediaState(media: media ?? this.media, state: state ?? this.state);
+  MediaState copyWith(
+          {Media media, BasicPlaybackState state, PlaybackState event}) =>
+      MediaState(
+          media: media ?? this.media,
+          state: state ?? this.state,
+          event: event ?? this.event);
 }
 
 /// Allows strongly typed binding of media state with any other value.
