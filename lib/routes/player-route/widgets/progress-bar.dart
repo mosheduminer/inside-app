@@ -5,8 +5,9 @@ import 'package:inside_chassidus/data/models/inside-data/media.dart';
 import 'package:inside_chassidus/data/media-manager.dart';
 import 'package:inside_chassidus/data/repositories/class-position-repository.dart';
 import 'package:inside_chassidus/util/duration-helpers.dart';
+import 'package:rxdart/rxdart.dart';
 
-typedef Widget ProgressStreamBuilder(WithMediaState<Duration> state);
+typedef Widget ProgressStreamBuilder(Duration state);
 
 class ProgressBar extends StatelessWidget {
   final Media media;
@@ -16,11 +17,9 @@ class ProgressBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final mediaManager = BlocProvider.getBloc<MediaManager>();
+
     final positionRepository =
         BlocProvider.getDependency<ClassPositionRepository>();
-    // As soon as we get to a class you're in the middle of, even before you play, show
-    // the position that you're at.
-    final startingPosition = positionRepository.getPosition(media);
 
     // Stream of media. A new media object is set when the duration is loaded.
     // Really, I should have all the durations offline, but I don't yet, so when I
@@ -37,72 +36,70 @@ class ProgressBar extends StatelessWidget {
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            _slider(mediaManager, media, start: startingPosition),
-            _timeLabels(mediaManager, media, start: startingPosition)
+            _slider(mediaManager, media,
+                start: positionRepository.getPositionsFor(this.media)),
+            _timeLabels(mediaManager, media,
+                start: positionRepository.getPositionsFor(this.media))
           ],
         );
       },
     );
   }
 
-  Row _timeLabels(MediaManager mediaManager, Media media, {Duration start}) {
+  Row _timeLabels(MediaManager mediaManager, Media media,
+      {Stream<Duration> start}) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: <Widget>[
         // Show current time in class.
         _stateDurationStreamBuilder(mediaManager.mediaPosition,
-            inactiveBuilder: (_) => _time(start),
-            builder: (data) => _time(data.data)),
+            start: start, builder: (position) => _time(position)),
         // Show time remaining in class.
         _stateDurationStreamBuilder(mediaManager.mediaPosition,
-            inactiveBuilder: (_) => _time(media.duration),
-            builder: (data) => _time(media.duration - data.data))
+            start: start,
+            builder: (position) => _time(media.duration - position))
       ],
     );
   }
 
-  Container _slider(MediaManager mediaManager, Media media, {Duration start}) {
+  Container _slider(MediaManager mediaManager, Media media,
+      {Stream<Duration> start}) {
     final maxSliderValue = media.duration?.inMilliseconds?.toDouble() ?? 0;
+
+    final onChanged = maxSliderValue == 0
+        ? null
+        : (double newProgress) => mediaManager.seek(
+            media, Duration(milliseconds: newProgress.round()));
 
     return Container(
       child: _stateDurationStreamBuilder(mediaManager.mediaPosition,
-          inactiveBuilder: (_) => Slider(
-                onChanged: null,
-                value: start.inMilliseconds.toDouble(),
-                max: maxSliderValue,
-              ),
-          builder: (data) {
-            double value = data.data.inMilliseconds.toDouble();
+          start: start, builder: (position) {
+        double value = position.inMilliseconds.toDouble();
 
-            value =
-                value > maxSliderValue ? maxSliderValue : value < 0 ? 0 : value;
+        value = value > maxSliderValue ? maxSliderValue : value < 0 ? 0 : value;
 
-            return Slider(
-              value: value,
-              max: maxSliderValue,
-              onChanged: (newProgress) => mediaManager.seek(
-                  media, Duration(milliseconds: newProgress.round())),
-            );
-          }),
+        return Slider(
+          value: value,
+          max: maxSliderValue,
+          onChanged: onChanged,
+        );
+      }),
     );
   }
 
-  /// Simplifies creating a [StreamBuilder] for [WithMediaState<Duration>]
+  // TODO: This method is really just taking up space. Move stream to own method
+  // and just use a StreamBuilder.
   Widget _stateDurationStreamBuilder<T>(Stream<WithMediaState<Duration>> stream,
-          {ProgressStreamBuilder builder,
-          ProgressStreamBuilder inactiveBuilder}) =>
-      StreamBuilder<WithMediaState<Duration>>(
-        stream: stream,
+          {ProgressStreamBuilder builder, @required Stream<Duration> start}) =>
+      StreamBuilder<Duration>(
+        stream: Rx.combineLatest2<WithMediaState<Duration>, Duration, Duration>(
+            stream.startWith(null), start, (mediaState, preloadedPosition) {
+          return preloadedPosition == Duration.zero && mediaState?.state?.media?.source == media.source
+              ? mediaState?.data
+              : preloadedPosition;
+        }),
         builder: (context, snapshot) {
-          if (!snapshot.hasData ||
-              snapshot.data.state.media.source != media.source ||
-              //(snapshot.data.state.duration == null && snapshot.data.data == null)
-              !snapshot.data.state.isLoaded) {
-            return inactiveBuilder(
-                WithMediaState<Duration>(data: Duration.zero, state: null));
-          }
-
-          return builder(snapshot.data);
+          return builder(snapshot.data ?? Duration.zero);
         },
       );
 

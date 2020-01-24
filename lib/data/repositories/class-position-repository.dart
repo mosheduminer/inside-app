@@ -1,12 +1,16 @@
+import 'package:audio_service/audio_service.dart';
 import 'package:hive/hive.dart';
 import 'package:inside_chassidus/data/models/inside-data/media.dart';
 import 'package:inside_chassidus/util/audio-service/audio-task.dart';
 import 'package:inside_chassidus/data/models/user-settings/class-position.dart';
+import 'package:rxdart/rxdart.dart';
 
 /// Provide read access to where user is up to in a lesson.
 /// (Writing only happens in [AudioTask])
 class ClassPositionRepository {
   Map<String, ClassPosition> _positions;
+
+  final BehaviorSubject<ClassPosition> _positionsSubject = BehaviorSubject();
 
   /// Load class positions and save them to memory. Should be run once, at app
   /// startup.
@@ -15,6 +19,11 @@ class ClassPositionRepository {
   /// thread isn't necessarily always going to be running; it can be closed, and the class will run
   /// in the background.
   init() async {
+    if (await AudioService.running) {
+      _positions = Map();
+      return;
+    }
+
     final positionBox = await Hive.openBox<ClassPosition>('positions');
 
     _positions = Map<String, ClassPosition>.fromIterable(positionBox.values,
@@ -40,7 +49,15 @@ class ClassPositionRepository {
     if (_positions.containsKey(media.source)) {
       _positions[media.source].position = position;
     } else {
-      _positions[media.source] = ClassPosition(mediaId: media.lessonId, position: position);
+      _positions[media.source] =
+          ClassPosition(mediaId: media.lessonId, position: position);
     }
+
+    _positionsSubject.value = _positions[media.source];
   }
+
+  Stream<Duration> getPositionsFor(Media media) => _positionsSubject
+      .where((position) => position?.mediaId == media.source)
+      .map((position) => position?.position)
+      .startWith(_positions[media.source]?.position);
 }

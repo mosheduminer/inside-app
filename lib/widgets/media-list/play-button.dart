@@ -18,7 +18,9 @@ class PlayButton extends StatelessWidget {
 
     return StreamBuilder<MediaState>(
       // It's tricky to get the button right during seeking, so just forget about it.
-      stream: mediaManger.mediaState.where((state) => !isSeeking(state.state)),
+      stream: mediaManger.mediaState.where((state) =>
+          !isSeeking(state.state) &&
+          state.state != BasicPlaybackState.buffering),
       builder: (context, snapshot) {
         VoidCallback onPressed = () => mediaManger.play(media);
         var icon = Icons.play_circle_filled;
@@ -28,7 +30,8 @@ class PlayButton extends StatelessWidget {
             return CircularProgressIndicator();
           }
 
-          if (snapshot.data.state == BasicPlaybackState.playing || snapshot.data.state == BasicPlaybackState.buffering) {
+          if (snapshot.data.state == BasicPlaybackState.playing ||
+              snapshot.data.state == BasicPlaybackState.buffering) {
             icon = Icons.pause_circle_filled;
             onPressed = () => mediaManger.pause();
           }

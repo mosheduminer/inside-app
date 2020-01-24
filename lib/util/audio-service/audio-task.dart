@@ -37,6 +37,8 @@ class AudioTask extends BackgroundAudioTask {
   /// This behaviour is paused when one lesson is played in middle of another.
   StreamSubscription _playerCompletedSubscription;
 
+  StreamSubscription _playerStateSubscription;
+
   /// The source for the current audio file.
   String mediaSource;
 
@@ -57,19 +59,24 @@ class AudioTask extends BackgroundAudioTask {
     }
 
     nextMediaSource = mediaId;
+    _playerStateSubscription.pause();
+
+    _setState(state: BasicPlaybackState.connecting);
 
     final length = await _audioPlayer.setUrl(mediaId);
 
     nextMediaSource = null;
     mediaSource = mediaId;
 
+   // _setState(state: BasicPlaybackState.connecting);
     _setMediaItem(length: length);
     await _onPlay();
+    _playerStateSubscription.resume();
   }
 
   @override
   Future<void> onStart() async {
-    final playbackStateSubscription =
+    _playerStateSubscription =
         _audioPlayer.playbackEventStream.listen(_onPlaybackEvent);
 
     final hiveFolder = await AppData.initHiveFolder();
@@ -79,7 +86,7 @@ class AudioTask extends BackgroundAudioTask {
 
     await _completer.future;
 
-    playbackStateSubscription.cancel();
+    _playerStateSubscription.cancel();
     await _positionBox.close();
     await _audioPlayer.dispose();
   }
@@ -114,8 +121,10 @@ class AudioTask extends BackgroundAudioTask {
               : null;
 
       _audioPlayer.play();
-
-      if (startPosition != null) {
+      
+      // Check if is seeking, in case UI isolate has already triggered
+      // a seek.
+      if (startPosition != null && !isSeeking(AudioServiceBackground.state.basicState)) {
         _audioPlayer.seek(startPosition);
       }
     }
@@ -227,6 +236,8 @@ class AudioTask extends BackgroundAudioTask {
         _setState(state: BasicPlaybackState.connecting);
         break;
       case AudioPlaybackState.none:
+        break;
+      case AudioPlaybackState.stopped:
         break;
       default:
         final state = AudioServiceBackground.state.basicState;

@@ -9,19 +9,38 @@ import 'package:inside_chassidus/util/audio-service/util.dart';
 import 'package:rxdart/rxdart.dart';
 
 class MediaManager extends BlocBase {
+  /// The media which is currently playing.
+  MediaState get current => _mediaSubject.value;
+
+  /// The current media state.
   Stream<MediaState> get mediaState => _mediaSubject;
+
+  /// The current media position.
   Stream<WithMediaState<Duration>> get mediaPosition => _positionSubject;
+
+  /// Stream for changes in position of not-playing lesson.
+  Stream<MapEntry<String, Duration>> get localPreSeek => _localPreSeekSubject;
 
   final ClassPositionRepository positionRepository;
 
+  /// Keep track of where in a class user seeks to before playback starts.
+  final Map<String, Duration> _localPreSeek = new Map();
+
   StreamSubscription<PlaybackState> _audioPlayerStateSubscription;
 
-  BehaviorSubject<MediaState> _mediaSubject = BehaviorSubject();
+  final BehaviorSubject<MediaState> _mediaSubject = BehaviorSubject();
+
   BehaviorSubject<WithMediaState<Duration>> _positionSubject =
       BehaviorSubject();
 
+  /// Stream for changes in position of not-playing lesson.
+  final BehaviorSubject<MapEntry<String, Duration>> _localPreSeekSubject =
+      new BehaviorSubject();
+
   // Ensure that seeks don't happen to frequently.
   final BehaviorSubject<Duration> _seekingValues = BehaviorSubject.seeded(null);
+
+  StreamSubscription _positionSubscription;
 
   MediaManager({this.positionRepository}) {
     _audioPlayerStateSubscription =
@@ -39,7 +58,8 @@ class MediaManager extends BlocBase {
       }
     });
 
-    Rx.combineLatest3<dynamic, Duration, MediaState, WithMediaState<Duration>>(
+    // Update stream of positions.
+    _positionSubscription = Rx.combineLatest3<dynamic, Duration, MediaState, WithMediaState<Duration>>(
         Stream.periodic(Duration(milliseconds: 20)),
         _seekingValues,
         // When user hits play, until play back starts, the manager doesn't know where
@@ -47,7 +67,7 @@ class MediaManager extends BlocBase {
         // The position repository and audio task are in charge of that.
         // Therefore, when event is null (from being set in play method) - don't update what
         // we consider to be current postion based on that.
-        _mediaSubject.where((media) => media.event != null),
+        _mediaSubject.where((media) => media.event != null && media.state != BasicPlaybackState.connecting),
         (_, displaySeek, mediaState) =>
             _getCurrentPosition(displaySeek, mediaState)).listen(
         (state) => _positionSubject.value = state);
@@ -62,7 +82,7 @@ class MediaManager extends BlocBase {
     // Change the audio position. Makes sure we don't seek too often.
     nonNullSeekingValues
         .sampleTime(Duration(milliseconds: 50))
-        .listen((position) async {
+        .listen((position) {
       AudioService.seekTo(
           position.inMilliseconds < 0 ? 0 : position.inMilliseconds);
     });
@@ -70,8 +90,8 @@ class MediaManager extends BlocBase {
     // Clear seeking value as soon as the latest value is being used by audio_service.
     // Untill then, it holds information relevant to the UI; after, that information has been
     // moved to audio_service.
-    Rx.combineLatest2<MediaState, Duration, void>(mediaState, nonNullSeekingValues,
-        (state, seeking) {
+    Rx.combineLatest2<MediaState, Duration, void>(
+        mediaState, nonNullSeekingValues, (state, seeking) {
       // Clear seeking_value if it's latest value has been consumed by audio_service.
       if (isSeeking(state.state) &&
           state.event.currentPosition == seeking.inMilliseconds) {
@@ -79,9 +99,6 @@ class MediaManager extends BlocBase {
       }
     }).listen((_) {});
   }
-
-  /// The media which is currently playing.
-  MediaState get current => _mediaSubject.value;
 
   pause() => AudioService.pause();
 
@@ -100,11 +117,21 @@ class MediaManager extends BlocBase {
 
     // While getting a file to play, we want to manually handle the state streams.
     _audioPlayerStateSubscription.pause();
+    _positionSubscription.pause();
 
     _mediaSubject.value =
         MediaState(media: media, state: BasicPlaybackState.connecting);
 
     await AudioService.playFromMediaId(media.source);
+
+    // Seek if user selected a new position.
+    // Continuing from a saved position (from lesson progress), though,
+    // is handled in audio_task.
+    if (_localPreSeek[media.source] != null) {
+      await AudioService.seekTo(
+          _localPreSeek.remove(media.source).inMilliseconds);
+      _localPreSeekSubject.value = MapEntry(media.source, null);
+    }
 
     var durationState = await AudioService.currentMediaItemStream
         .where((item) =>
@@ -128,21 +155,30 @@ class MediaManager extends BlocBase {
         state: AudioService.playbackState.basicState, media: media);
 
     _audioPlayerStateSubscription.resume();
+    _positionSubscription.resume();
   }
 
   /// Updates the current location in given media.
   seek(Media media, Duration location) {
+    // If user is seeking in a class which isn't currently being played, save it
+    // to play from that location when we get there.
     if (media.source != _mediaSubject.value?.media?.source) {
-      print('hmmm');
-      return;
+      _localPreSeek[media.source] = location;
+      _localPreSeekSubject.value = MapEntry(media.source, location);
+    } else {
+      _seekingValues.add(location);
     }
-
-    _seekingValues.add(location);
   }
 
   skip(Media media, Duration duration) async {
-    final currentLocation = _positionSubject.value.data.inMilliseconds;
-    seek(media, Duration(milliseconds: currentLocation) + duration);
+    var currentLocation = _positionSubject.value.data;
+
+    if (media.source != _mediaSubject.value.media.source) {
+      currentLocation =
+          _localPreSeek[media.source] ?? positionRepository.getPosition(media);
+    }
+
+    seek(media, currentLocation + duration);
   }
 
   WithMediaState<Duration> _getCurrentPosition(
@@ -168,6 +204,7 @@ class MediaManager extends BlocBase {
     _mediaSubject.close();
     _positionSubject.close();
     _seekingValues.close();
+    _localPreSeekSubject.close();
     super.dispose();
   }
 }
