@@ -3,6 +3,8 @@ import 'package:inside_chassidus/data/models/inside-data/index.dart';
 import 'package:inside_chassidus/widgets/media/audio-button-bar-aware-body.dart';
 import 'package:inside_chassidus/widgets/media/current-media-button-bar.dart';
 
+import 'inside-bottom-navigation.dart';
+
 class InsideScaffold extends StatelessWidget {
   final InsideDataBase insideData;
   final Widget body;
@@ -15,5 +17,6 @@ class InsideScaffold extends StatelessWidget {
           title: Text(insideData.title,
               style: Theme.of(context).appBarTheme.textTheme?.title)),
       body: AudioButtonbarAwareBody(body: body),
+      bottomNavigationBar: InsideBottomNavigator(),
       bottomSheet: CurrentMediaButtonBar());
 }

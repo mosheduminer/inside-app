@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:inside_chassidus/data/models/inside-data/index.dart';
 import 'package:inside_chassidus/routes/player-route/widgets/index.dart';
+import 'package:inside_chassidus/widgets/inside-bottom-navigation.dart';
 import 'package:inside_chassidus/widgets/media/audio-button-bar.dart';
 
 class PlayerRoute extends StatelessWidget {
@@ -35,7 +36,8 @@ class PlayerRoute extends StatelessWidget {
 
           return Container();
         },
-      ));
+      ),
+      bottomNavigationBar: InsideBottomNavigator(),);
 
   /// Returns lesson title and media title.
   /// If the media doesn't have a title, just returns lesson title as title.
