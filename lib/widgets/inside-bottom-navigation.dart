@@ -12,6 +12,6 @@ class InsideBottomNavigator extends StatelessWidget {
         ],
         currentIndex: 0,
         onTap: (_) =>
-            Navigator.of(context).pushNamed(PrimarySectionsRoute.routeName));
+            Navigator.of(context).pushNamedAndRemoveUntil(PrimarySectionsRoute.routeName, (_) => false));
   }
 }

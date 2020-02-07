@@ -18,8 +18,7 @@ class PrimarySectionsRoute extends StatelessWidget {
           title: _title(context),
         ),
         body: AudioButtonbarAwareBody(body: _sectionsFuture(context)),
-        bottomSheet: CurrentMediaButtonBar(),
-        bottomNavigationBar: InsideBottomNavigator(),
+        bottomSheet: CurrentMediaButtonBar()
       );
 
   Widget _title(BuildContext context) => Container(
